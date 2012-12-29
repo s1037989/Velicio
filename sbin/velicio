@@ -22,7 +22,8 @@ GetOptions(
 die <<"EOF" if $help;
 usage: $0 [OPTIONS]
 
-  velicio -w wss://use.velicio.us
+  velicio -h https://velicio.us
+  velicio -w wss://velicio.us
 
 These options are available:
   -d, --daemon             Run as a daemon
@@ -59,7 +60,8 @@ velicio - Agent for Velicious server
 =head1 SYNOPSIS
 
   $ velicio --help
-  $ velicio -w wss://use.velicio.us
+  $ velicio -h https://velicio.us
+  $ velicio -w wss://velicio.us
 
 =head1 DESCRIPTION
 

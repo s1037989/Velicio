@@ -108,7 +108,7 @@ sub new {
 	$App::Daemon::logfile = $self->{LOGDIR}."/$PROGRAM.log";
 	$App::Daemon::pidfile = $self->{RUNDIR}."/$PROGRAM.pid";
 	$App::Daemon::as_user = ((getpwuid($>))[0]);
-	$App::Daemon::background = $ENV{VELICIO_DAEMON};
+	$App::Daemon::background = $ENV{VELICIO_DAEMON}||0;
 	chown (((getpwnam($ENV{VELICIO_ASUSER}))[2,3]), $self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
 
 	# TODO: Be able to reload, say after an agent upgrade command, or after the server drops the connection
@@ -306,6 +306,7 @@ sub code { # Whatever code is presented to me, eval it (I 110% trust the server 
 
 	if ( my $code = $self->recv->{code} ) {
 		#warn "Received code\n", grep { /^package / } split /\n/, $code;
+		no strict;
 		no warnings;
 		eval $code;
 		if ( $@ ) {
