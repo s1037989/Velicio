@@ -31,6 +31,7 @@ WriteMakefile(
         'CPAN'                           => 0,
         'Data::Serializer::Data::Dumper' => 0,
         'App::Daemon'                    => 0,
+        'Math::Prime::Util'              => 0,
     },
     dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean               => { FILES => 'Velicio-*' },

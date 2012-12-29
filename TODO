@@ -1,8 +1,9 @@
-# staticperl cpan Data::Serializer Mojolicious Storable Data::Serializer::Storable App::Daemon Getopt::Long
+# staticperl cpan Data::Serializer Mojolicious Storable Data::Serializer::Storable App::Daemon Getopt::Long Math::Prime::Util
 # staticperl mkapp v --boot /data/git/velicio/velicio.pl --staticlib crypt \
 #   -MFile::Path -MScalar::Util -MData::Serializer -MSys::Hostname -MMojo::Util -MMojo::IOLoop \
 #   -MMojo::UserAgent -MData::Dumper -MGetopt::Long -MStorable -MData::Serializer::Storable \
-#   -MCompress::Zlib -MDigest -MCPAN -MData::Serializer::Data::Dumper -MApp::Daemon -MGetopt::Long
+#   -MCompress::Zlib -MDigest -MCPAN -MData::Serializer::Data::Dumper -MApp::Daemon -MGetopt::Long \
+#   -MMath::Prime::Util
 
 # TODO: Add flag to auto-add sample config on new reg (requires email registration)
 # TODO: Add glibc to staticperl for a truly static binary

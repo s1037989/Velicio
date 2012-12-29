@@ -31,6 +31,7 @@ use Data::Serializer;
 use Mojo::Util;
 use Mojo::IOLoop;
 use Mojo::UserAgent;  
+use Math::Prime::Util 'next_prime';
 
 =head1 SYNOPSIS
 
@@ -103,6 +104,7 @@ sub new {
 	$ENV{VELICIO_PING_INTERVAL} ||= 30;
 	$ENV{VELICIO_CHECK_INTERVAL} ||= 604_800;
 	$ENV{VELICIO_INACTIVITY_TIMEOUT} ||= 60;
+	$ENV{VELICIO_CONNECTION_ATTEMPTS} ||= 0;
 	$ENV{VELICIO_ASUSER} ||= 'nobody';
 	make_path($self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
 	$App::Daemon::logfile = $self->{LOGDIR}."/$PROGRAM.log";
@@ -128,32 +130,44 @@ sub websocket {
 	return unless $ENV{VELICIO_WEBSOCKET_SERVER};
 
 	my $websocket = $ENV{VELICIO_WEBSOCKET_SERVER}.'/ws';
-	my $ua = Mojo::UserAgent->new;
-	$ua->inactivity_timeout($ENV{VELICIO_INACTIVITY_TIMEOUT});
 
-	$ua->websocket($websocket => sub {
-		my ($ua, $tx) = @_;
-		if ( $self->tx($tx) ) {
-			$self->register;
-			$self->send({code=>undef,run=>undef}); # Request code and run configuration
-			$self->tx->on(error => sub { warn "Error: $_[1]" });
-			$self->tx->on(message => sub { $self->recv($_[1]) });
-			$self->tx->on(finish => sub { $self->disconnect("Server disconnected") });
-			Mojo::IOLoop->recurring($ENV{VELICIO_PING_INTERVAL} => sub {
-				$self->log("Ping");
-				if ( !$self->schedule ) {
-					$self->send({run=>undef});
-				} else {
-					$self->send('1');
-				}
-			});
-		} else {
-			$self->log("Cannot connect to $websocket");
-		}
-	});
+	my $n = 0;
+	my $x = $ENV{VELICIO_CONNECTION_ATTEMPTS};
+	do {
+		my $ua = Mojo::UserAgent->new;
+		$ua->inactivity_timeout($ENV{VELICIO_INACTIVITY_TIMEOUT});
 
-	$self->log("Starting Event loop with $websocket");
-	Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+		$ua->websocket($websocket => sub {
+			my ($ua, $tx) = @_;
+			if ( $self->tx($tx) ) {
+				$n = 0;
+				$ENV{VELICIO_CONNECTION_ATTEMPTS} = $x;
+				$self->register;
+				$self->send({code=>undef,run=>undef}); # Request code and run configuration
+				$self->tx->on(error => sub { warn "Error: $_[1]" });
+				$self->tx->on(message => sub { $self->recv($_[1]) });
+				$self->tx->on(finish => sub { $self->disconnect("Server $websocket disconnected") });
+				$self->{__SCHEDULES}->{ping} = Mojo::IOLoop->recurring($ENV{VELICIO_PING_INTERVAL} => sub {
+					$self->log("Ping");
+					if ( !$self->schedule ) {
+						$self->send({run=>undef});
+					} else {
+						$self->send({p=>1});
+					}
+				});
+			} else {
+				$self->log("Cannot connect to $websocket");
+				$self->disconnect;
+			}
+		});
+
+		$self->log("Starting Event loop with $websocket");
+		Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+		$n = next_prime($n);
+		$self->log("$ENV{VELICIO_CONNECTION_ATTEMPTS} retries remaining") if $ENV{VELICIO_CONNECTION_ATTEMPTS} >= 1;
+		$self->log("Waiting $n seconds before retrying");
+		sleep $n;
+	} while ( --$ENV{VELICIO_CONNECTION_ATTEMPTS} );
 }
 
 ### These methods should get moved into another class
@@ -164,7 +178,7 @@ sub tx {
 		warn "Storing tx\n";
 		$self->{__TX} = $tx;
 	}
-	return $self->{__TX}->can('send') ? $self->{__TX} : undef;
+	return defined $self->{__TX} && $self->{__TX}->can('send') ? $self->{__TX} : undef;
 }
 
 sub debug {
@@ -178,7 +192,7 @@ sub debug {
 sub log {
 	my $self = shift;
 	my $msg = shift;
-	warn "$msg\n";
+	warn "$msg\n" if $msg;
 }
 
 sub serializer { shift->{__SERIALIZER} ||= $_[0] || new Data::Serializer(serializer => 'Storable', compress => 1) }
@@ -196,7 +210,7 @@ sub send {
 	my $self = shift;
 
 	my %msg = ();
-	foreach my $msg ( @{$self->{__SEND_QUEUE}}, @_ ) {
+	foreach my $msg ( grep { ref $_ eq 'HASH' } @{$self->{__SEND_QUEUE}}, @_ ) {
 		$msg{$_} = _unbless($msg->{$_}) foreach keys %$msg;
 	}
 	my $msg = $self->serializer->serialize({%msg});
@@ -232,12 +246,12 @@ sub disconnect {
 	my $self = shift;
 	my $msg = shift;
 	$self->log($msg);
-	$self->{__DISCONNECTED} = 1;
 	#warn "To automatically reconnect, put this script in an infinite loop.\n";
 	#warn "It should wait first 5 seconds, then 30 seconds, then 5 minutes, then 1 hour, then 1 day everyday...\n";
-	$self->tx->finish;
-	delete $self->{__TX};
-	exit;
+	$self->tx->finish if ref $self->tx;
+	Mojo::IOLoop->remove($self->{__SCHEDULES}->{$_}) foreach keys %{$self->{__SCHEDULES}};
+	delete $self->{$_} foreach grep { /^__/ } keys %$self;
+	Mojo::IOLoop->stop;
 }
 sub disconnected { shift->{__TX} ? 0 : 1 }
 

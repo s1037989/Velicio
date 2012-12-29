@@ -16,6 +16,7 @@ GetOptions(
 	'ping-interval=i' => sub { $ENV{VELICIO_PING_INTERVAL} = $_[1] },
 	'check-interval=i' => sub { $ENV{VELICIO_CHECK_INTERVAL} = $_[1] },
 	'inactivity-timeout=i' => sub { $ENV{VELICIO_INACTIVITY_TIMEOUT} = $_[1] },
+	'connection-attempts=i' => sub { $ENV{VELICIO_CONNECTION_ATTEMPTS} = $_[1] },
 );
 
 # Usage
@@ -26,15 +27,16 @@ usage: $0 [OPTIONS]
   velicio -w wss://velicio.us
 
 These options are available:
-  -d, --daemon             Run as a daemon
-  -?, --help               Show this message.
-  -h, --http               Set server for HTTP requests
-  -w, --websocket          Set server for Websocket conversations
-      --ping-interval      Set the ping interval
-      --check-interval     Set the check interval
-      --inactivity-timeout Set the inactivity timeout
-      --stop               Stop daemon gracefully.
-      --status             Show daemon status
+  -d, --daemon              Run as a daemon
+  -?, --help                Show this message.
+  -h, --http                Set server for HTTP requests
+  -w, --websocket           Set server for Websocket conversations
+      --ping-interval       Set the ping interval
+      --check-interval      Set the check interval
+      --inactivity-timeout  Set the inactivity timeout
+      --connection-attempts Set the inactivity timeout
+      stop                  Stop daemon gracefully.
+      status                Show daemon status
 EOF
 
 use Velicio;
