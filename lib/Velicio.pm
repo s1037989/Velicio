@@ -98,16 +98,18 @@ sub new {
 			@_
 		};
 	}
-	$self->{port} ||= 80;
-	$self->{ws_port} ||= 3002;
-	$self->{as_user} ||= 'nobody';
+	$ENV{VELICIO_HTTP_SERVER} ||= 'https://velicio.us';
+	$ENV{VELICIO_WEBSOCKET_SERVER} ||= 'wss://velicio.us';
+	$ENV{VELICIO_PING_INTERVAL} ||= 30;
+	$ENV{VELICIO_CHECK_INTERVAL} ||= 604_800;
+	$ENV{VELICIO_INACTIVITY_TIMEOUT} ||= 60;
+	$ENV{VELICIO_ASUSER} ||= 'nobody';
 	make_path($self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
 	$App::Daemon::logfile = $self->{LOGDIR}."/$PROGRAM.log";
 	$App::Daemon::pidfile = $self->{RUNDIR}."/$PROGRAM.pid";
 	$App::Daemon::as_user = ((getpwuid($>))[0]);
-	$App::Daemon::background = $self->{daemon};
-	chown (((getpwnam($self->{as_user}))[2,3]), $self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
-	return undef unless $self->{host};
+	$App::Daemon::background = $ENV{VELICIO_DAEMON};
+	chown (((getpwnam($ENV{VELICIO_ASUSER}))[2,3]), $self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
 
 	# TODO: Be able to reload, say after an agent upgrade command, or after the server drops the connection
 	daemonize();
@@ -123,9 +125,11 @@ sub new {
 sub websocket {
 	my $self = shift;
 
-	my $websocket = 'w'.($self->{ssl}?'s':'').'s://'.$self->{host}.":".$self->{ws_port}."/ws";
+	return unless $ENV{VELICIO_WEBSOCKET_SERVER};
+
+	my $websocket = $ENV{VELICIO_WEBSOCKET_SERVER}.'/ws';
 	my $ua = Mojo::UserAgent->new;
-	$ua->inactivity_timeout($self->{inactivity_timeout});
+	$ua->inactivity_timeout($ENV{VELICIO_INACTIVITY_TIMEOUT});
 
 	$ua->websocket($websocket => sub {
 		my ($ua, $tx) = @_;
@@ -135,7 +139,7 @@ sub websocket {
 			$self->tx->on(error => sub { warn "Error: $_[1]" });
 			$self->tx->on(message => sub { $self->recv($_[1]) });
 			$self->tx->on(finish => sub { $self->disconnect("Server disconnected") });
-			Mojo::IOLoop->recurring($self->{ping_interval}||30 => sub {
+			Mojo::IOLoop->recurring($ENV{VELICIO_PING_INTERVAL} => sub {
 				$self->log("Ping");
 				if ( !$self->schedule ) {
 					$self->send({run=>undef});
@@ -319,7 +323,7 @@ sub schedule {
 
 	unless ( @_ ) {
 		return 0 unless keys %{$self->{__SCHEDULES}};
-		return time - $self->{__SCHEDULE} < $self->{check_interval}||60*60*24*7;
+		return time - $self->{__SCHEDULE} < $ENV{VELICIO_CHECK_INTERVAL};
 	}
 
 	my $freq = shift||0;

@@ -3,32 +3,42 @@
 use strict;
 use warnings;
 
-use Getopt::Long;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
 
-my %opts = (
-	daemon => 0,
-	host => 'dev.velicio.us',
-	port => 80,
-	ws_port => 3002,
-	ssl => 0,
-	ping_interval => 30,
-	check_interval => 604_800,
-	inactivity_timeout => 60,
-);
-Getopt::Long::Configure ("bundling");
+use Getopt::Long qw(GetOptions :config no_auto_abbrev no_ignore_case);
+
 GetOptions(
-	\%opts,
-	'daemon|d',
-	'host|h=s',
-	'port|p=i',
-	'ws_port|w=i',
-	'ssl|s',
-	'ping_interval=i',
-	'check_interval=i',
-	'inactivity_timeout=i',
+	'daemon|d' => sub { $ENV{VELICIO_DAEMON} = 1 },
+	'help|?' => \my $help,
+	'http|h=s' => sub { $ENV{VELICIO_HTTP_SERVER} = $_[1] },
+	'websocket|w=s' => sub { $ENV{VELICIO_WEBSOCKET_SERVER} = $_[1] },
+	'ping-interval=i' => sub { $ENV{VELICIO_PING_INTERVAL} = $_[1] },
+	'check-interval=i' => sub { $ENV{VELICIO_CHECK_INTERVAL} = $_[1] },
+	'inactivity-timeout=i' => sub { $ENV{VELICIO_INACTIVITY_TIMEOUT} = $_[1] },
 );
 
-my $velicio = new Velicio(%opts) or die "Options: [-d] [-h host] [-g ping_int] [-k check_int] [-s] [-p port] [-w ws_port]\n";
+# Usage
+die <<"EOF" if $help;
+usage: $0 [OPTIONS]
+
+  velicio -w wss://use.velicio.us
+
+These options are available:
+  -d, --daemon             Run as a daemon
+  -?, --help               Show this message.
+  -h, --http               Set server for HTTP requests
+  -w, --websocket          Set server for Websocket conversations
+      --ping-interval      Set the ping interval
+      --check-interval     Set the check interval
+      --inactivity-timeout Set the inactivity timeout
+      --stop               Stop daemon gracefully.
+      --status             Show daemon status
+EOF
+
+use Velicio;
+
+my $velicio = new Velicio or die "Options: [-d] [-h http://server] [-w ws://server]\n";
 
 if ( 0 ) {
 	# TODO: Send email to link a user to this agent
@@ -41,3 +51,22 @@ if ( 0 ) {
 }
 
 $velicio->websocket;
+
+=head1 NAME
+
+velicio - Agent for Velicious server
+
+=head1 SYNOPSIS
+
+  $ velicio --help
+  $ velicio -w wss://use.velicio.us
+
+=head1 DESCRIPTION
+
+Start L<velicio> agent with the L<Velicio> agent library.
+
+=head1 SEE ALSO
+
+L<Velicio>, L<http://velicio.us>.
+
+=cut
