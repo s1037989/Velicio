@@ -163,6 +163,7 @@ sub websocket {
 
 		$self->log("Starting Event loop with $websocket");
 		Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+		$n = 60*5 if $n > 60*15;
 		$n = next_prime($n);
 		$self->log("$ENV{VELICIO_CONNECTION_ATTEMPTS} retries remaining") if $ENV{VELICIO_CONNECTION_ATTEMPTS} >= 1;
 		$self->log("Waiting $n seconds before retrying");
