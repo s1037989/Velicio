@@ -1,0 +1,43 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use Getopt::Long;
+
+my %opts = (
+	daemon => 0,
+	host => 'dev.velicio.us',
+	port => 80,
+	ws_port => 3002,
+	ssl => 0,
+	ping_interval => 30,
+	check_interval => 604_800,
+	inactivity_timeout => 60,
+);
+Getopt::Long::Configure ("bundling");
+GetOptions(
+	\%opts,
+	'daemon|d',
+	'host|h=s',
+	'port|p=i',
+	'ws_port|w=i',
+	'ssl|s',
+	'ping_interval=i',
+	'check_interval=i',
+	'inactivity_timeout=i',
+);
+
+my $velicio = new Velicio(%opts) or die "Options: [-d] [-h host] [-g ping_int] [-k check_int] [-s] [-p port] [-w ws_port]\n";
+
+if ( 0 ) {
+	# TODO: Send email to link a user to this agent
+	# TODO: Send any valid run hash
+	# TODO: Get status
+	if ( 0 ) {
+		$velicio->post;
+	}
+	exit;
+}
+
+$velicio->websocket;
