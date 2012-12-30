@@ -27,11 +27,15 @@ use Sys::Hostname;
 
 # Additional modules necessary available on CPAN
 use App::Daemon 'daemonize';
+use Log::Log4perl qw(:easy);
 use Data::Serializer;
 use Mojo::Util;
 use Mojo::IOLoop;
 use Mojo::UserAgent;  
 use Math::Prime::Util 'next_prime';
+
+# My modules
+use Velicio::Log;
 
 =head1 SYNOPSIS
 
@@ -100,7 +104,10 @@ sub new {
 		};
 	}
 	$ENV{VELICIO_HTTP_SERVER} ||= 'https://velicio.us';
-	$ENV{VELICIO_WEBSOCKET_SERVER} ||= 'wss://velicio.us';
+	unless ( $ENV{VELICIO_WEBSOCKET_SERVER} ) {
+		$ENV{VELICIO_WEBSOCKET_SERVER} = $ENV{VELICIO_HTTP_SERVER};
+		$ENV{VELICIO_WEBSOCKET_SERVER} =~ s/^http/ws/;
+	}
 	$ENV{VELICIO_PING_INTERVAL} ||= 30;
 	$ENV{VELICIO_CHECK_INTERVAL} ||= 604_800;
 	$ENV{VELICIO_INACTIVITY_TIMEOUT} ||= 60;
@@ -112,8 +119,8 @@ sub new {
 	$App::Daemon::as_user = ((getpwuid($>))[0]);
 	$App::Daemon::background = $ENV{VELICIO_DAEMON}||0;
 	chown (((getpwnam($ENV{VELICIO_ASUSER}))[2,3]), $self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
+	$self->{__LOGGER} = new Velicio::Log($ENV{VELICIO_LOG_LEVEL});
 
-	# TODO: Be able to reload, say after an agent upgrade command, or after the server drops the connection
 	daemonize();
 	return bless $self, $class;
 }
@@ -144,29 +151,30 @@ sub websocket {
 				$ENV{VELICIO_CONNECTION_ATTEMPTS} = $x;
 				$self->register;
 				$self->send({code=>undef,run=>undef}); # Request code and run configuration
-				$self->tx->on(error => sub { warn "Error: $_[1]" });
+				$self->tx->on(error => sub { $self->log->error("Error: $_[1]") });
 				$self->tx->on(message => sub { $self->recv($_[1]) });
 				$self->tx->on(finish => sub { $self->disconnect("Server $websocket disconnected") });
 				$self->{__SCHEDULES}->{ping} = Mojo::IOLoop->recurring($ENV{VELICIO_PING_INTERVAL} => sub {
-					$self->log("Ping");
 					if ( !$self->schedule ) {
+						$self->log->info("Requesting schedule from server");
 						$self->send({run=>undef});
 					} else {
+						$self->log->info("Ping");
 						$self->send({p=>1});
 					}
 				});
 			} else {
-				$self->log("Cannot connect to $websocket");
+				$self->log->error("Cannot connect to $websocket");
 				$self->disconnect;
 			}
 		});
 
-		$self->log("Starting Event loop with $websocket");
+		$self->log->info("Starting Event loop with $websocket");
 		Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
 		$n = 60*5 if $n > 60*15;
 		$n = next_prime($n);
-		$self->log("$ENV{VELICIO_CONNECTION_ATTEMPTS} retries remaining") if $ENV{VELICIO_CONNECTION_ATTEMPTS} >= 1;
-		$self->log("Waiting $n seconds before retrying");
+		$self->log->info("$ENV{VELICIO_CONNECTION_ATTEMPTS} retries remaining") if $ENV{VELICIO_CONNECTION_ATTEMPTS} >= 1;
+		$self->log->info("Waiting $n seconds before retrying");
 		sleep $n;
 	} while ( --$ENV{VELICIO_CONNECTION_ATTEMPTS} );
 }
@@ -176,25 +184,13 @@ sub websocket {
 sub tx {
 	my $self = shift;
 	if ( my $tx = shift ) {
-		warn "Storing tx\n";
+		$self->log->info("Storing tx");
 		$self->{__TX} = $tx;
 	}
 	return defined $self->{__TX} && $self->{__TX}->can('send') ? $self->{__TX} : undef;
 }
 
-sub debug {
-	my $self = shift;
-	my $level = shift;
-	return 0 unless $ENV{DEBUG};
-	use Data::Dumper;
-	return $ENV{DEBUG} =~ /$level/;
-}
-
-sub log {
-	my $self = shift;
-	my $msg = shift;
-	warn "$msg\n" if $msg;
-}
+sub log { shift->{__LOGGER} }
 
 sub serializer { shift->{__SERIALIZER} ||= $_[0] || new Data::Serializer(serializer => 'Storable', compress => 1) }
 
@@ -202,7 +198,7 @@ sub queue {
 	my $self = shift;
 	my $msg = shift;
 	if ( $msg && ref $msg eq 'HASH' ) {
-		warn Dumper({queueing=>$msg}) if $self->debug('Q');
+		$self->log->trace({queueing=>$msg});
 		push @{$self->{__SEND_QUEUE}}, $msg;
 	}
 }
@@ -215,7 +211,7 @@ sub send {
 		$msg{$_} = _unbless($msg->{$_}) foreach keys %$msg;
 	}
 	my $msg = $self->serializer->serialize({%msg});
-	warn Dumper({queue => $self->{__SEND_QUEUE}, combined_queue => {%msg}, serialized => $msg}) if $self->debug('S');
+	$self->log->trace({queue => $self->{__SEND_QUEUE}, combined_queue => {%msg}, serialized => $msg});
 	$self->tx->send($msg) if $msg && ! ref $msg;
 	delete $self->{__SEND_QUEUE};
 }
@@ -226,7 +222,7 @@ sub recv {
 	if ( $msg && ! ref $msg ) {
 		my $_msg = $msg;
 		$msg = $self->serializer->deserialize($msg);
-		warn Dumper({recv => [$_msg, $msg]}) if $self->debug('R');
+		$self->log->trace({recv => [$_msg, $msg]});
 		# The protocol is thus:
 		# Receive -> Process -> Send
 		# Every received message results in sending a response
@@ -246,15 +242,15 @@ sub message {
 sub disconnect {
 	my $self = shift;
 	my $msg = shift;
-	$self->log($msg);
-	#warn "To automatically reconnect, put this script in an infinite loop.\n";
-	#warn "It should wait first 5 seconds, then 30 seconds, then 5 minutes, then 1 hour, then 1 day everyday...\n";
+	$self->log->info($msg);
 	$self->tx->finish if ref $self->tx;
 	Mojo::IOLoop->remove($self->{__SCHEDULES}->{$_}) foreach keys %{$self->{__SCHEDULES}};
 	delete $self->{$_} foreach grep { /^__/ } keys %$self;
 	Mojo::IOLoop->stop;
 }
 sub disconnected { shift->{__TX} ? 0 : 1 }
+
+sub demo_mode { exists $ENV{VELICIO_DEMO_MODE} ? $ENV{VELICIO_DEMO_MODE} : 1 }
 
 sub process { # Gets called by recv which gets called by on->message
 	my $self = shift;
@@ -273,10 +269,10 @@ sub upgrade_agent {
 
 	if ( my $upgrade = $self->recv->{upgrade} ) {
 		if ( $upgrade->{can_upgrade} ) {
-			$self->log("Upgrade available: $upgrade->{latest}");
+			$self->log->info("Upgrade available: $upgrade->{latest}");
 		}
 		if ( $upgrade->{must_upgrade} ) {
-			$self->log("Must upgrade to at least version $upgrade->{minimum}");
+			$self->log->info("Must upgrade to at least version $upgrade->{minimum}");
 			return 1;
 		}
 	}
@@ -292,14 +288,14 @@ sub register {
 	return if $self->registered;
 
 	if ( exists $self->recv->{registration} ) {
-		$self->log("Received Registration from Server and Storing on Disk");
+		$self->log->info("Received Registration from Server and Storing on Disk");
 		Mojo::Util::spurt $self->recv->{registration}, $self->{STATEDIR}.'/registration';
 	} elsif ( not $self->registered ) {
 		if ( -e $self->{STATEDIR}.'/registration' && -r _ ) {
-			$self->log("Read Registration from Disk and Sending to Server");
+			$self->log->info("Read Registration from Disk and Sending to Server");
 			$self->registration(Mojo::Util::slurp $self->{STATEDIR}.'/registration');
 		} else {
-			$self->log("Requesting New Registration from Server");
+			$self->log->info("Requesting New Registration from Server");
 		}
 		$self->queue({registration=>$self->registration, perl_version=>sprintf('%vd', $^V), version=>"$NAME $VERSION", hostname=>hostname});
 	}
@@ -323,11 +319,22 @@ sub code { # Whatever code is presented to me, eval it (I 110% trust the server 
 		#warn "Received code\n", grep { /^package / } split /\n/, $code;
 		no strict;
 		no warnings;
-		eval $code;
-		if ( $@ ) {
-			$self->log("Error loading code: $!");
+		if ( $self->demo_mode ) {
+			$self->log->info("Running in safe demo mode -- NO code from server will be eval'd");
+			eval {
+				package Velicio::Base;
+				sub run {
+					$self->log->debug("Demo for $_[1]");
+					return {status=>1, details=>"Demo for $_[1]"};
+				}
+			};
 		} else {
-			$self->log("Successfully updated code");
+			eval $code;
+			if ( $@ ) {
+				$self->log->error("Error loading code: $!");
+			} else {
+				$self->log->info("Successfully updated code");
+			}
 		}
 	}
 }
@@ -346,12 +353,16 @@ sub schedule {
 	my $run = shift;
 
 	my $schedule = sub {
-		$self->log("Running ${freq}s schedule now");
-		$self->send({run=>[map { $self->log("  $_->{pkg}"); "Velicio::Code::$_->{pkg}"->run($_) } @$run]});
+		$self->log->info("Running ${freq}s schedule now");
+		if ( $self->demo_mode ) {
+			$self->send({run=>[map { $self->log->info("  $_->{pkg}"); "Velicio::Base"->run($_->{pkg}) } @$run]});
+		} else {
+			$self->send({run=>[map { $self->log->info("  $_->{pkg}"); "Velicio::Code::$_->{pkg}"->run($_) } @$run]});
+		}
 	};
 
 	if ( $freq ) {
-		warn "Scheduling $freq\n";
+		$self->log->info("Scheduling $freq");
 		Mojo::IOLoop->remove($self->{__SCHEDULES}->{$freq}) if $self->{__SCHEDULES}->{$freq};
 		$self->{__SCHEDULES}->{$freq} = Mojo::IOLoop->recurring($freq => $schedule);
 		$self->{__SCHEDULE} = time;
