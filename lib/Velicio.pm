@@ -65,10 +65,6 @@ sub _unbless {
 
 =head2 new (%opts)
 
-    daemon
-
-    host
-
 =cut
 
 sub new {
@@ -120,6 +116,7 @@ sub new {
 	$App::Daemon::background = $ENV{VELICIO_DAEMON}||0;
 	chown (((getpwnam($ENV{VELICIO_ASUSER}))[2,3]), $self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
 	$self->{__LOGGER} = new Velicio::Log($ENV{VELICIO_LOG_LEVEL});
+	$App::Daemon::loglevel = $self->{__LOGGER}->loglevel;
 
 	daemonize();
 	return bless $self, $class;
