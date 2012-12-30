@@ -27,7 +27,6 @@ use Sys::Hostname;
 
 # Additional modules necessary available on CPAN
 use App::Daemon 'daemonize';
-use Log::Log4perl qw(:easy);
 use Data::Serializer;
 use Mojo::Util;
 use Mojo::IOLoop;
@@ -115,7 +114,7 @@ sub new {
 	$App::Daemon::as_user = ((getpwuid($>))[0]);
 	$App::Daemon::background = $ENV{VELICIO_DAEMON}||0;
 	chown (((getpwnam($ENV{VELICIO_ASUSER}))[2,3]), $self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
-	$self->{__LOGGER} = new Velicio::Log($ENV{VELICIO_LOG_LEVEL});
+	$self->{__LOGGER} = new Velicio::Log({level=>$ENV{VELICIO_LOG_LEVEL}, file=>$App::Daemon::background?undef:'STDERR'});
 	$App::Daemon::loglevel = $self->{__LOGGER}->loglevel;
 
 	daemonize();

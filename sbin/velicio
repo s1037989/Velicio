@@ -33,7 +33,7 @@ These options are available:
   -?, --help                Show this message.
   -h, --http                Set server for HTTP requests
   -w, --websocket           Set server for Websocket conversations
-  -l, --log-level           Set the log level, defaults to ERROR
+  -l, --log-level           Set the log level
   -D, --no-demo-mode        Turn off demo mode
       --ping-interval       Set the ping interval
       --check-interval      Set the check interval
