@@ -114,8 +114,8 @@ sub new {
 	$App::Daemon::as_user = ((getpwuid($>))[0]);
 	$App::Daemon::background = $ENV{VELICIO_DAEMON}||0;
 	chown (((getpwnam($ENV{VELICIO_ASUSER}))[2,3]), $self->{STATEDIR}, $self->{LOGDIR}, $self->{RUNDIR});
-	$self->{__LOGGER} = new Velicio::Log({level=>$ENV{VELICIO_LOG_LEVEL}, file=>$App::Daemon::background?undef:'STDERR'});
-	$App::Daemon::loglevel = $self->{__LOGGER}->loglevel;
+	$self->{LOGGER} = new Velicio::Log({level=>$ENV{VELICIO_LOG_LEVEL}, file=>$App::Daemon::background?undef:'STDERR'});
+	$App::Daemon::loglevel = $self->{LOGGER}->loglevel;
 
 	daemonize();
 	return bless $self, $class;
@@ -136,43 +136,46 @@ sub websocket {
 
 	my $n = 0;
 	my $x = $ENV{VELICIO_CONNECTION_ATTEMPTS};
-	do {
-		my $ua = Mojo::UserAgent->new;
-		$ua->inactivity_timeout($ENV{VELICIO_INACTIVITY_TIMEOUT});
+	LOOP: {
+		do {
+			my $ua = Mojo::UserAgent->new;
+			$ua->inactivity_timeout($ENV{VELICIO_INACTIVITY_TIMEOUT});
 
-		$ua->websocket($websocket => sub {
-			my ($ua, $tx) = @_;
-			if ( $self->tx($tx) ) {
-				$n = 0;
-				$ENV{VELICIO_CONNECTION_ATTEMPTS} = $x;
-				$self->register;
-				$self->send({code=>undef,run=>undef}); # Request code and run configuration
-				$self->tx->on(error => sub { $self->log->error("Error: $_[1]") });
-				$self->tx->on(message => sub { $self->recv($_[1]) });
-				$self->tx->on(finish => sub { $self->disconnect("Server $websocket disconnected") });
-				$self->{__SCHEDULES}->{ping} = Mojo::IOLoop->recurring($ENV{VELICIO_PING_INTERVAL} => sub {
-					if ( !$self->schedule ) {
-						$self->log->info("Requesting schedule from server");
-						$self->send({run=>undef});
-					} else {
-						$self->log->info("Ping");
-						$self->send({p=>1});
-					}
-				});
-			} else {
-				$self->log->error("Cannot connect to $websocket");
-				$self->disconnect;
-			}
-		});
+			$ua->websocket($websocket => sub {
+				my ($ua, $tx) = @_;
+				if ( $self->tx($tx) ) {
+					$n = 0;
+					$ENV{VELICIO_CONNECTION_ATTEMPTS} = $x;
+					$self->register;
+					$self->send({code=>undef,run=>undef}); # Request code and run configuration
+					$self->tx->on(error => sub { $self->log->error("Error: $_[1]") });
+					$self->tx->on(message => sub { $self->recv($_[1]) });
+					$self->tx->on(finish => sub { $self->disconnect("Server $websocket disconnected") });
+					$self->{__SCHEDULES}->{ping} = Mojo::IOLoop->recurring($ENV{VELICIO_PING_INTERVAL} => sub {
+						if ( !$self->schedule ) {
+							$self->log->trace("Requesting schedule from server");
+							$self->send({run=>undef});
+						} else {
+							$self->log->trace("Ping");
+							$self->send({p=>1});
+						}
+					});
+				} else {
+					$self->disconnect("Cannot connect to $websocket");
+				}
+			});
 
-		$self->log->info("Starting Event loop with $websocket");
-		Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
-		$n = 60*5 if $n > 60*15;
-		$n = next_prime($n);
-		$self->log->info("$ENV{VELICIO_CONNECTION_ATTEMPTS} retries remaining") if $ENV{VELICIO_CONNECTION_ATTEMPTS} >= 1;
-		$self->log->info("Waiting $n seconds before retrying");
-		sleep $n;
-	} while ( --$ENV{VELICIO_CONNECTION_ATTEMPTS} );
+			$self->log->trace("Starting Event loop with $websocket");
+			Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+			$self->log->trace("Event loop with $websocket disconnected");
+			last LOOP if $self->agent_must_upgrade;
+			$n = 60*5 if $n > 60*15;
+			$n = next_prime($n);
+			$self->log->info("$ENV{VELICIO_CONNECTION_ATTEMPTS} retries remaining") if $ENV{VELICIO_CONNECTION_ATTEMPTS} >= 1;
+			$self->log->info("Waiting $n seconds before retrying");
+			sleep $n;
+		} while ( --$ENV{VELICIO_CONNECTION_ATTEMPTS} );
+	}
 }
 
 ### These methods should get moved into another class
@@ -180,13 +183,17 @@ sub websocket {
 sub tx {
 	my $self = shift;
 	if ( my $tx = shift ) {
-		$self->log->info("Storing tx");
-		$self->{__TX} = $tx;
+		if ( defined $tx && $tx->can('send') ) {
+			$self->log->info("Storing tx");
+			$self->{__TX} = $tx;
+		} else {
+			$self->log->trace("Cannot connect");
+		}
 	}
-	return defined $self->{__TX} && $self->{__TX}->can('send') ? $self->{__TX} : undef;
+	return $self->{__TX};
 }
 
-sub log { shift->{__LOGGER} }
+sub log { shift->{LOGGER} }
 
 sub serializer { shift->{__SERIALIZER} ||= $_[0] || new Data::Serializer(serializer => 'Storable', compress => 1) }
 
@@ -238,7 +245,7 @@ sub message {
 sub disconnect {
 	my $self = shift;
 	my $msg = shift;
-	$self->log->info($msg);
+	$self->log->error($msg) if $msg;
 	$self->tx->finish if ref $self->tx;
 	Mojo::IOLoop->remove($self->{__SCHEDULES}->{$_}) foreach keys %{$self->{__SCHEDULES}};
 	delete $self->{$_} foreach grep { /^__/ } keys %$self;
@@ -260,19 +267,41 @@ sub process { # Gets called by recv which gets called by on->message
 
 ### These methods should get moved into another class
 
-sub upgrade_agent {
+sub agent_check { # Should only return false if MUST but CAN'T
 	my $self = shift;
 
+	$self->log->trace("Checking agent");
 	if ( my $upgrade = $self->recv->{upgrade} ) {
-		if ( $upgrade->{can_upgrade} ) {
-			$self->log->info("Upgrade available: $upgrade->{latest}");
-		}
 		if ( $upgrade->{must_upgrade} ) {
-			$self->log->info("Must upgrade to at least version $upgrade->{minimum}");
-			return 1;
+			$self->log->info("Must upgrade to at least version $upgrade->{min}, latest is $upgrade->{latest}");
+			unless ( $self->upgrade_agent($upgrade->{url}) ) {
+				$self->log->error("Tried to upgrade agent but process failed; aborting event loop");
+				$self->disconnect;
+				$self->{__AGENT_MUST_UPGRADE} = 1;
+				return 0;
+			}
+		} elsif ( $upgrade->{can_upgrade} ) {
+			$self->log->info("Upgrade available: $upgrade->{latest}");
+			$self->upgrade_agent($upgrade->{url});
 		}
 	}
-	return 0;
+	return 1;
+}
+
+sub agent_must_upgrade { shift->{__AGENT_MUST_UPGRADE} }
+
+sub upgrade_agent { # Return upgrading success/fail
+	my $self = shift;
+	return 0 unless $ENV{VELICIO_AUTO_UPDATE};
+	$self->disconnect;
+	my $url = shift;
+	my $ua = Mojo::UserAgent->new;
+	$ua->inactivity_timeout($ENV{VELICIO_INACTIVITY_TIMEOUT});
+	local $_ = $ua->get($url)->res->body;
+	local @_ = qx(date ; echo \$?);
+	$self->log->debug(@_);
+	chomp($_[-1]);
+	return $_[-1] =~ /^\d+$/ ? $_[-1]==0?1:0 : 0;
 }
 
 ### These methods should get moved into another class
@@ -280,7 +309,7 @@ sub upgrade_agent {
 sub register {
 	my $self = shift;
 
-	return if $self->upgrade_agent;
+	return unless $self->agent_check;
 	return if $self->registered;
 
 	if ( exists $self->recv->{registration} ) {

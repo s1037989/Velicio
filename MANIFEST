@@ -1,5 +1,6 @@
 Changes
 lib/Velicio.pm
+lib/Velicio/Log.pm
 sbin/velicio
 Makefile.PL
 MANIFEST			This list of files
